@@ -30,10 +30,54 @@ set ở tests/vn_pii_testset.jsonl):
 """
 from __future__ import annotations
 
+import re
+
+
+EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+CCCD_RE = re.compile(r"(?<!\d)\d{12}(?!\d)")
+PHONE_RE = re.compile(r"(?<!\d)0(?:[ -]?\d){9,10}(?!\d)")
+BANK_RE = re.compile(
+    r"(?:\bSTK\b|\bsố\s+tài\s+khoản\b)\s*:?\s*(\d{8,16})(?!\d)",
+    re.IGNORECASE,
+)
+
 
 def detect(text: str) -> list[dict]:
-    raise NotImplementedError("BƯỚC 3a: implement PII detection")
+    entities: list[dict] = []
+    bank_spans: list[tuple[int, int]] = []
+
+    # Nhận diện STK tránh phân loại nhầm STK 12 thành CCCD
+    for match in BANK_RE.finditer(text):
+        start, end = match.span(1)
+        bank_spans.append((start, end))
+        entities.append({"type": "VN_BANK_ACCOUNT", "start": start, "end": end})
+
+    for pattern, entity_type in (
+        (CCCD_RE, "VN_CCCD"),
+        (PHONE_RE, "VN_PHONE"),
+        (EMAIL_RE, "EMAIL"),
+    ):
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            overlaps_bank = any(
+                start < bank_end and bank_start < end
+                for bank_start, bank_end in bank_spans
+            )
+            if entity_type != "EMAIL" and overlaps_bank:
+                continue
+
+            entities.append({"type": entity_type, "start": start, "end": end})
+
+    return sorted(entities, key=lambda item: (item["start"], item["end"]))
 
 
 def redact(text: str) -> str:
-    raise NotImplementedError("BƯỚC 3a: implement PII redaction")
+    entities = detect(text)
+
+    for entity in sorted(entities, key=lambda item: item["start"], reverse=True):
+        start = entity["start"]
+        end = entity["end"]
+        replacement = f"[REDACTED_{entity['type']}]"
+        text = text[:start] + replacement + text[end:]
+
+    return text
