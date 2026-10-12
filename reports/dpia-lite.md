@@ -1,6 +1,6 @@
 # DPIA-lite — điền trong checkpoint 5
 
-1. Loại dữ liệu và phân loại:
-2. Mục đích xử lý và principal:
-3. Dữ liệu đi qua những run/tool nào, endpoint nào:
-4. Bằng chứng deny/allow và giới hạn của mock:
+1. Loại dữ liệu và phân loại: Ticket trong corpus/ có nội dung do người gửi cung cấp, gồm cả lure giả chỉ thị. Hồ sơ trong data/customers.json là fixture tổng hợp được cung cấp cho bài lab, có mã khách, CCCD, số điện thoại và số tài khoản; runner xếp hồ sơ vào loại restricted. Không dùng hồ sơ khách thật.
+2. Mục đích xử lý và principal: Câu hỏi là tổng hợp ticket đang mở. search_docs dùng mục đích summarize-tickets; đọc hồ sơ dùng support-reply. Lượt kiểm chứng chọn dpo, principal fixture được phép đọc hồ sơ liên quan. support_l1 bị từ chối. Tùy chọn --as chỉ giả lập danh tính trong lab, không phải xác thực người dùng thật.
+3. Dữ liệu đi qua những run/tool nào, endpoint nào: Run A tìm ticket bằng search_docs, rồi chỉ chuyển ticket ID lấy từ tên file. Run B đối chiếu ID với related_tickets và đọc hồ sơ khách liên quan. Khi mock nhận ra lure, runner thử http_post, policy ghi quyết định trước khi gọi tool và từ chối dữ liệu restricted qua egress. Endpoint sink của lab chỉ ở http://127.0.0.1:10024. Ledger giữ hash của tham số, không giữ nguyên nội dung hồ sơ. agent/pii.py có regex detect()/redact(), nhưng runner hiện không gọi pii.redact(), lượt này dựa vào policy chặn gửi, không dựa vào redaction
+4. Bằng chứng deny/allow và giới hạn của mock: Toàn bộ test: 33 passed, 0 skipped. attack-before.log có 298 byte và có mã synthetic KH-000999; attack-after.log có 0 byte. Ledger có 24 dòng, dòng 24 ghi http_post là deny, reason restricted data cannot be sent through egress, on_behalf_of=dpo; verify() trả True. Đây chỉ là kết quả với mock LLM, principal giả và sink localhost. Regex có thể bỏ sót PII; --as không chứng minh authentication thật; hash chain không phát hiện việc xóa dòng cuối hoặc viết lại toàn bộ ledger. Đây không phải DPIA pháp lý chính thức

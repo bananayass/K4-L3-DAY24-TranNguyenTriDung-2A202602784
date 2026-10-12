@@ -11,7 +11,11 @@
 - Gitleaks file hiện tại — không có finding, mã thoát 0, không cần allowlist
 - python -m pip install --require-hashes -r requirements.lock: thành công, các package trong lock đã có sẵn
 - pre-commit install: hook đã được cài tại .git/hooks/pre-commit
-- `python -m pytest tests/ -q`:
+- CP5 — `.venv/bin/python -m pytest tests/ -q --basetemp=.pytest_tmp`: 33 passed, 0 failed, 0 skipped
+- CP5 replay — `.venv/bin/python -m agent.loop --mock --as dpo "Tổng hợp các ticket còn mở tuần này"`: exit 0; agent tổng hợp 45 ticket
+- CP5 log — attack-before.log: 298 byte, có KH-000999 synthetic; attack-after.log: 0 byte
+- CP5 ledger — 24 dòng; dòng 24 ghi http_post deny, reason restricted data cannot be sent through egress, on_behalf_of=dpo; verify(Path("reports/ledger.jsonl")): True
 - `pre-commit run --all-files`: Passed
-- Ledger verify: test sửa dòng các cũ trong tests/test_ledger.py làm verify trả về False
-- Các lỗi còn lại:
+- Ledger verify: test sửa một dòng cũ trong tests/test_ledger.py làm verify trả về False
+- Lỗi môi trường đã xử lý: lần pytest đầu bị sandbox từ chối mở socket localhost (`PermissionError: Operation not permitted`), chạy lại với quyền mở sink localhost thì test pass ổn
+- Các lỗi còn lại: không còn lỗi test, agent/pii.redact() chưa được gọi trong runner, đã ghi rõ giới hạn ở reports/dpia-lite.md
