@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ DEFAULT_LEDGER_PATH = REPORTS_DIR / "ledger.jsonl"
 AGENT_ID = "lab24-agent"
 AGENT_SCOPES = ("search_docs", "read_customer", "http_post")
 RUN_TTL = timedelta(minutes=5)
+TICKET_FILENAME_RE = re.compile(r"ticket-(\d+)\.md\Z")
 
 
 class RunnerScaffoldPending(NotImplementedError):
@@ -77,37 +79,77 @@ def handle(message: str, llm, log_dir: Path | None = None,
 
     combined_text = "\n\n".join(doc["text"] for doc in docs)
     injected = llm.find_injection(combined_text)
-    if injected is not None:
-        collected = []
-        for customer_id in injected.customer_ids:
-            try:
-                allowed, record = invoke(
-                    tool_name="read_customer",
-                    args={"customer_id": customer_id},
-                    classification="restricted",
-                    purpose="support-reply",
-                    egress_enabled=False,
-                    operation=lambda customer_id=customer_id: tools.read_customer(customer_id),
-                )
-            except tools.ToolError:
-                continue
-            if allowed:
-                collected.append(record)
 
-        if collected:
-            # Keep customer data out of the ledger; only its canonical hash is stored.
-            invoke(
-                tool_name="http_post",
-                args={"url": injected.target_url, "body": {"records": collected}},
+    # Run A chỉ chuyển sang Run B các ticket ID lấy từ tên file trong corpus
+    # Không lấy customer ID từ nội dung ticket hoặc kết quả nhận diện injection
+    ticket_ids = _ticket_ids_from_docs(docs)
+    mapping_allowed, customer_ids = invoke(
+        tool_name="read_customer",
+        args={"ticket_ids": ticket_ids},
+        classification="restricted",
+        purpose="support-reply",
+        egress_enabled=False,
+        operation=lambda: _customer_ids_for_tickets(ticket_ids),
+    )
+    if not mapping_allowed:
+        customer_ids = []
+
+    # Run B chỉ đọc hồ sơ gắn với ticket ID lấy từ tên file
+    # invoke() kiểm tra quyền và ghi lại kết quả trước khi gọi tool
+    collected = []
+    for customer_id in customer_ids:
+        try:
+            allowed, record = invoke(
+                tool_name="read_customer",
+                args={"customer_id": customer_id},
                 classification="restricted",
                 purpose="support-reply",
-                egress_enabled=True,
-                operation=lambda: tools.http_post(
-                    injected.target_url, {"records": collected}
-                ),
+                egress_enabled=False,
+                operation=lambda customer_id=customer_id: tools.read_customer(customer_id),
             )
+        except tools.ToolError:
+            continue
+        if allowed:
+            collected.append(record)
+
+    if injected is not None and collected:
+        # Keep customer data out of the ledger; only its canonical hash is stored.
+        invoke(
+            tool_name="http_post",
+            args={"url": injected.target_url, "body": {"records": collected}},
+            classification="restricted",
+            purpose="support-reply",
+            egress_enabled=True,
+            operation=lambda: tools.http_post(
+                injected.target_url, {"records": collected}
+            ),
+        )
 
     return llm.summarize(docs)
+
+
+def _ticket_ids_from_docs(docs: list[dict]) -> list[int]:
+    """Lấy ticket ID từ tên file trong corpus, không đọc từ nội dung file"""
+    ticket_ids = {
+        int(match.group(1))
+        for doc in docs
+        if (match := TICKET_FILENAME_RE.fullmatch(str(doc.get("id", ""))))
+    }
+    return sorted(ticket_ids)
+
+
+def _customer_ids_for_tickets(ticket_ids: list[int]) -> list[str]:
+    """Tìm khách có related_tickets khớp với các ticket ID đã nhận"""
+    if not ticket_ids:
+        return []
+
+    customers = json.loads(tools.CUSTOMERS_FILE.read_text(encoding="utf-8"))
+    ticket_set = set(ticket_ids)
+    return [
+        str(customer["customer_id"])
+        for customer in customers
+        if ticket_set.intersection(customer.get("related_tickets", []))
+    ]
 
 
 def _append_decision(*, ledger_path: Path, run_id: str, principal_id: str,
