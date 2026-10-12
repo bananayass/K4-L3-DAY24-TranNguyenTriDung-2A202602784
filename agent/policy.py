@@ -34,7 +34,13 @@ không phải xác thực người dùng production.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+PRINCIPALS_PATH = Path(__file__).resolve().parent.parent / "data" / "principals.json"
 
 
 @dataclass(frozen=True)
@@ -55,7 +61,40 @@ def check(context: PolicyContext) -> tuple[bool, str]:
     if context.data_classification == "restricted" and context.egress_enabled:
         return False, "restricted data cannot be sent through egress"
 
+    if context.data_classification not in {"public", "internal", "restricted"}:
+        return False, "unknown data classification"
+
+    try:
+        principals = json.loads(PRINCIPALS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "principal configuration is unavailable"
+
+    principal = principals.get(context.principal_id)
+    if principal is None:
+        return False, "unknown principal"
+
+    if not context.requested_tool:
+        return False, "requested tool is missing"
+    if context.requested_tool not in principal.get("allowed_tools", []):
+        return False, "principal is not allowed to use this tool"
+    if context.requested_tool not in context.agent_scopes:
+        return False, "tool is outside the agent scopes"
+    if context.delegation_depth > 0 and context.requested_tool not in context.parent_scopes:
+        return False, "tool is outside the parent scopes"
+
+    if context.request_purpose not in principal.get("purposes", []):
+        return False, "principal is not allowed for this purpose"
+
+    try:
+        expires_at = datetime.fromisoformat(context.expires_at.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return False, "invalid or missing expiration time"
+    if expires_at.tzinfo is None:
+        return False, "expiration time must include a timezone"
+    if expires_at <= datetime.now(timezone.utc):
+        return False, "run has expired"
+
     return True, (
-        f"{context.data_classification} data is allowed "
-        f"for purpose: {context.request_purpose}"
+        f"{context.requested_tool} is allowed for principal "
+        f"{context.principal_id} and purpose {context.request_purpose}"
     )
