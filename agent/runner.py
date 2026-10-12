@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent import policy, tools
+from agent import ledger, policy, tools
 from agent.policy import PolicyContext
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
@@ -169,6 +169,4 @@ def _append_decision(*, ledger_path: Path, run_id: str, principal_id: str,
         "on_behalf_of": principal_id,
         "expires_at": expires_at,
     }
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with ledger_path.open("a", encoding="utf-8") as ledger_file:
-        ledger_file.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    ledger.append(entry, ledger_path)

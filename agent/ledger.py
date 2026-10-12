@@ -37,12 +37,79 @@ rồi gọi verify() phải trả về False.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
+
+ZERO_HASH = "0" * 64
+REQUIRED_FIELDS = {
+    "ts", "agent_id", "run_id", "tool", "args_hash",
+    "classification", "decision", "reason",
+}
+
+
+def _hash_entry(entry: dict) -> str:
+    payload = {key: value for key, value in entry.items() if key != "hash"}
+    encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def append(entry: dict, path: Path) -> dict:
-    raise NotImplementedError("BƯỚC 3d: implement ledger append")
+    if not isinstance(entry, dict):
+        raise TypeError("ledger entry must be a dict")
+    missing = REQUIRED_FIELDS.difference(entry)
+    if missing:
+        raise ValueError(f"ledger entry missing fields: {', '.join(sorted(missing))}")
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    previous_hash = ZERO_HASH
+    if path.exists() and path.stat().st_size:
+        if not verify(path):
+            raise ValueError("cannot append to an invalid ledger")
+        last_record = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+        previous_hash = last_record["hash"]
+
+    record = dict(entry)
+    record.pop("prev_hash", None)
+    record.pop("hash", None)
+    record["prev_hash"] = previous_hash
+    record["hash"] = _hash_entry(record)
+
+    with path.open("a", encoding="utf-8") as ledger_file:
+        ledger_file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
 
 
 def verify(path: Path) -> bool:
-    raise NotImplementedError("BƯỚC 3d: implement ledger verify")
+    path = Path(path)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not lines:
+        return False
+
+    expected_previous = ZERO_HASH
+    for line in lines:
+        if not line.strip():
+            return False
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(record, dict):
+            return False
+        reason = record.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return False
+        if record.get("prev_hash") != expected_previous:
+            return False
+
+        stored_hash = record.get("hash")
+        if not isinstance(stored_hash, str) or stored_hash != _hash_entry(record):
+            return False
+        expected_previous = stored_hash
+
+    return True
